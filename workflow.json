@@ -1,0 +1,428 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-captura",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "06b69b64-264d-4757-9af9-0a851212affb",
+      "name": "Webhook",
+      "webhookId": "9b838b7f-b264-49f5-a53b-6f31b049e2fa",
+      "notes": "Entrada do fluxo. Recebe os dados enviados via formulário ou sistema externo, contendo informações do produto, cliente, etc."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_OPENAI_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        0
+      ],
+      "id": "62fadb2a-f6f1-465f-8c04-4d25e2d5ab7d",
+      "name": "HTTP Request",
+      "notes": "Chama a API da OpenAI para classificar o produto. Recebe como resposta a categoria, objetivo e público-alvo."
+    },
+    {
+      "parameters": {
+        "jsCode": "const texto = $json.choices[0].message.content;\n\nconst categoria = texto.match(/Categoria:\\s*(.+)/i)?.[1]?.trim() || '';\nconst objetivo = texto.match(/Objetivo Principal:\\s*(.+)/i)?.[1]?.trim() || '';\nconst publicoRaw = texto.match(/P[uú]blico[-–]Alvo Comum:\\s*([\\s\\S]+?)(?:\\n\\n|É importante|$)/i)?.[1]?.trim() || '';\n\nconst publico_alvo = publicoRaw\n  .split('\\n')\n  .map(l => l.replace(/^[-•–]\\s*/, '').trim())\n  .filter(l => l.length > 0);\n\nreturn [\n  {\n    json: {\n      categoria,\n      objetivo,\n      publico_alvo,\n      texto_original: texto\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        0
+      ],
+      "id": "20bffef4-b36f-4989-aec9-478a9914a439",
+      "name": "Resposta IA",
+      "notes": "Processa e organiza a resposta da OpenAI, estruturando os dados recebidos para uso posterior no fluxo.\n\n"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      model: \"gpt-4-1106-preview\",\n      temperature: 0.2,\n      messages: [\n        {\n          role: \"system\",\n          content: \"Você é um classificador de produtos para campanhas de marketing nutricional.\"\n        },\n        {\n          role: \"user\",\n          content: \"Classifique o seguinte produto: \" + $input.first().json.body.produto + \". Me diga a categoria, o objetivo principal e o público-alvo comum.\"\n        }\n      ]\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "3cb01602-43d0-477d-b4e6-464d5533d9e7",
+      "name": "JSON para request",
+      "notes": "Formata os dados recebidos no webhook para o formato necessário para a API da OpenAI. Estrutura o corpo da requisição com os dados do produto."
+    },
+    {
+      "parameters": {
+        "jsCode": "function slugify(text) {\n  return text\n    .toLowerCase()\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9]+/g, '-')\n    .replace(/^-+|-+$/g, '');\n}\n\nconst categoria = slugify($json.categoria || '');\nconst objetivo = slugify($json.objetivo || '');\n\nconst publico_raw = $json.publico_alvo || [];\nconst publico_array = Array.isArray(publico_raw)\n  ? publico_raw\n  : String(publico_raw).split('\\n');\n\nconst tags = [\n  `tag_categoria:${categoria}`,\n  `tag_objetivo:${objetivo}`,\n  ...publico_array.map(p => `tag_publico:${slugify(p)}`)\n];\n\nreturn [\n  {\n    json: {\n      ...$json,\n      tags\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        0
+      ],
+      "id": "735ad822-189c-4165-aa6a-b79e05250416",
+      "name": "Gerar tags",
+      "notes": "Gera as possíveis tags (categoria, objetivo, público-alvo) com base na resposta da IA. Concatena prefixos para manter padrão."
+    },
+    {
+      "parameters": {
+        "email": "={{ $('Webhook').item.json.body.email }}",
+        "updateIfExists": true,
+        "additionalFields": {
+          "firstName": "={{ $('Webhook').item.json.body.nome }}"
+        }
+      },
+      "type": "n8n-nodes-base.activeCampaign",
+      "typeVersion": 1,
+      "position": [
+        2360,
+        80
+      ],
+      "id": "64134f77-2f55-4b35-97c6-84e5ff500715",
+      "name": "Criar Contato",
+      "credentials": {
+        "activeCampaignApi": {
+          "id": "jWbnPpSYl8hJjW5v",
+          "name": "ActiveCampaign account"
+        }
+      },
+      "notes": "Cria ou atualiza o contato no ActiveCampaign.\nSe o e-mail já existir, o contato é atualizado.\nGarante que os dados estejam atualizados antes de associar as tags."
+    },
+    {
+      "parameters": {
+        "resource": "tag",
+        "name": "={{ $('Gerar tags').item.json.tags[0] }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.activeCampaign",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        180
+      ],
+      "id": "06015cb7-0826-42b4-aeed-afebf829c6b3",
+      "name": "Salvar Tags",
+      "credentials": {
+        "activeCampaignApi": {
+          "id": "jWbnPpSYl8hJjW5v",
+          "name": "ActiveCampaign account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Cria a tag no ActiveCampaign somente se ela ainda não existir.\nUsa a informação vinda do loop/tag gerada."
+    },
+    {
+      "parameters": {
+        "resource": "contactTag",
+        "tagId": "={{ $('Code').item.json.tagId }}",
+        "contactId": "={{ $('Criar Contato').item.json.id }}\n"
+      },
+      "type": "n8n-nodes-base.activeCampaign",
+      "typeVersion": 1,
+      "position": [
+        2620,
+        80
+      ],
+      "id": "39213e31-6d27-4eea-8bb7-4c93979ad294",
+      "name": "Atribuir Tags",
+      "credentials": {
+        "activeCampaignApi": {
+          "id": "jWbnPpSYl8hJjW5v",
+          "name": "ActiveCampaign account"
+        }
+      },
+      "notes": "Associa a tag ao contato recém-criado, usando os valores de ID da tag (Code) e ID do contato (Criar Contato)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "279834a7-dc16-42e2-beb3-1a0dcae0d1b9",
+              "leftValue": "={{ $json.tagExiste }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1700,
+        100
+      ],
+      "id": "e1c54d7e-7385-4c8f-80ce-1b1f3b3212eb",
+      "name": "If",
+      "notes": "Verifica se a tag já existe.\n\nTrue: Tag já existe → pula a criação\n\nFalse: Tag não existe → cria a tag com “Salvar Tags”"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1060,
+        0
+      ],
+      "id": "074fcc61-d5ca-42f0-9e4a-36b4ac95a4f3",
+      "name": "Loop Tag",
+      "notes": "Percorre todas as tags geradas (uma por vez), permitindo verificar se cada uma já existe ou não antes de tomar uma ação."
+    },
+    {
+      "parameters": {
+        "resource": "tag",
+        "operation": "getAll",
+        "simple": false
+      },
+      "type": "n8n-nodes-base.activeCampaign",
+      "typeVersion": 1,
+      "position": [
+        1280,
+        100
+      ],
+      "id": "cde3992b-7729-438a-b4bd-bee2bb5b742b",
+      "name": "Get Tag",
+      "credentials": {
+        "activeCampaignApi": {
+          "id": "jWbnPpSYl8hJjW5v",
+          "name": "ActiveCampaign account"
+        }
+      },
+      "notes": "Consulta o ActiveCampaign com Get Many Tags para buscar todas as tags existentes no sistema e verificar duplicação."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Esse function espera que apenas 1 item tenha chegado (da tag existente OU criada)\n\nconst item = items[0]; // Pode vir do \"Salvar Tags\" ou \"Get Tag\"\nconst tagId = item.json.id || item.json.tag?.id;\n\nreturn [\n  {\n    json: {\n      tagId: tagId\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        80
+      ],
+      "id": "717e087b-84f6-404e-ba36-26863361cdde",
+      "name": "Code",
+      "notes": "Recebe um único item (tag existente ou criada)\nExtrai o ID da tag para uso posterior\nRetorna: { tagId: <id da tag> }\n"
+    },
+    {
+      "parameters": {
+        "jsCode": "// tag que estamos verificando, vinda do loop\nconst tagDesejada = $json;\n\n// tags existentes, vindas do node \"Get Tag\"\nconst tagsExistentes = $node[\"Get Tag\"].json.tags || [];\n\n// verifica se alguma tag existente tem o mesmo nome\nconst existe = tagsExistentes.some(tag => tag.tag === tagDesejada);\n\n// retorna o resultado e a tag verificada\nreturn [\n  {\n    json: {\n      tagExiste: existe,\n      tag: tagDesejada\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        100
+      ],
+      "id": "5a6577c6-aac5-47e9-bfe4-b72030007578",
+      "name": "tagExiste",
+      "alwaysOutputData": true,
+      "notes": "Verifica se a tag atual (do loop) já existe nas tags retornadas do ActiveCampaign\n Retorna: { tagExiste: true/false, tag: <string> }\n"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "JSON para request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Resposta IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JSON para request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resposta IA": {
+      "main": [
+        [
+          {
+            "node": "Gerar tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar tags": {
+      "main": [
+        [
+          {
+            "node": "Loop Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Contato": {
+      "main": [
+        [
+          {
+            "node": "Atribuir Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Tags": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atribuir Tags": {
+      "main": [
+        []
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Salvar Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Tag": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Get Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Tag": {
+      "main": [
+        [
+          {
+            "node": "Loop Tag",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "tagExiste",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Criar Contato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "tagExiste": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1dcbff37-3573-4ef3-85c8-d51d1af3df4f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "cfa7eaaa91eb56ad3a9d8f47bb1215fd5923adfcba40c3b443ca4003a224cbe1"
+  },
+  "id": "g0FSyg4DD3uY4Qzl",
+  "tags": []
+}
